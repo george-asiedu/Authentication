@@ -129,11 +129,11 @@ export class AuthService {
       throw new BadRequestException('Invalid email or password');
     }
 
-    // if (!user.isVerified) {
-    //   throw new BadRequestException(
-    //     'Account not verified. Please verify your email.',
-    //   );
-    // }
+    if (!user.isVerified) {
+      throw new BadRequestException(
+        'Account not verified. Please verify your email.',
+      );
+    }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
