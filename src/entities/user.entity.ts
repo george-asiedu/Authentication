@@ -17,13 +17,13 @@ export class User {
   @Column()
   public name!: string;
 
-  @Column({ type: 'varchar', length: 15, nullable: true })
+  @Column({ type: 'varchar', length: 15, nullable: true, unique: true })
   public phone!: string;
 
   @Column({ type: 'date', nullable: true })
   public dob!: string;
 
-  @Column({ unique: true })
+  @Column({ unique: true, nullable: true })
   public email!: string;
 
   @Column({
