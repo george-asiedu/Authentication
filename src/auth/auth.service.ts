@@ -16,6 +16,7 @@ import { LoginDto } from './dto/login.dto';
 import { User } from 'src/entities/user.entity';
 import { RefreshTokenDto } from './dto/refreshToken.dto';
 import { SignupResponseDto } from './dto/signupResponse.dto';
+import { constants } from '../utils/constants';
 
 @Injectable()
 export class AuthService {
@@ -30,11 +31,11 @@ export class AuthService {
   async signup(
     user: SignupDto,
   ): Promise<{ user: SignupResponseDto; token: string }> {
-    const existingUser = await this.usersRepository.findOneBy({
-      email: user.phone,
+    const existingUser = await this.usersRepository.findOne({
+      where: [{ email: user.email || '' }, { phone: user.phone || '' }],
     });
     if (existingUser) {
-      throw new ConflictException('Email is already in use');
+      throw new ConflictException('Phone or Email is already in use');
     }
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -48,7 +49,7 @@ export class AuthService {
         { userId: newUser.id },
         {
           secret: this.configService.get<string>('JWT_SECRET'),
-          expiresIn: '10m',
+          expiresIn: constants.expiresIn,
         },
       );
 
@@ -63,10 +64,10 @@ export class AuthService {
           `Error sending email: ${emailError.message}`,
         );
       }
-      const { id, code: userCode, email, phone, name, role } = newUser;
+      const { id, code: userCode, email, phone, dob, name, role } = newUser;
 
       return {
-        user: { id, code: userCode, email, phone, name, role },
+        user: { id, code: userCode, email, phone, dob, name, role },
         token: blockToken,
       };
     } catch (error) {
@@ -74,7 +75,7 @@ export class AuthService {
         error instanceof QueryFailedError &&
         error.driverError.code === '23505'
       ) {
-        throw new ConflictException('Email is already in use');
+        throw new ConflictException('Phone or Email is already in use');
       }
       throw error;
     }
@@ -110,35 +111,32 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto): Promise<SignInResponse> {
-    const jwtSecret = this.configService.get<string>('JWT_SECRET');
-    const jwtExpiry = this.configService.get<string>('JWT_EXPIRY');
+    const { phone, password, email } = loginDto;
+    const user = await this.usersRepository.findOne({
+      where: phone ? { phone } : { email },
+      select: [
+        'id',
+        'email',
+        'password',
+        'name',
+        'phone',
+        'dob',
+        'role',
+        'isVerified',
+      ],
+    });
+
+    if (!user) throw new BadRequestException('Invalid credentials');
+    if (!user.isVerified) throw new BadRequestException('Account not verified');
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) throw new BadRequestException('Invalid password');
+
     const jwtRefreshExpiry = this.configService.get<string>(
       'JWT_REFRESH_EXPIRES_IN',
     );
     const jwtRefreshSecret =
       this.configService.get<string>('JWT_REFRESH_SECRET');
-
-    const { phone, password } = loginDto;
-
-    const user = await this.usersRepository.findOne({
-      where: { phone: phone },
-      select: ['id', 'email', 'password', 'name', 'phone', 'dob', 'role'],
-    });
-
-    if (!user) {
-      throw new BadRequestException('Invalid email or password');
-    }
-
-    if (!user.isVerified) {
-      throw new BadRequestException(
-        'Account not verified. Please verify your email.',
-      );
-    }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new BadRequestException('Invalid password');
-    }
 
     const payload = {
       id: user.id,
@@ -148,8 +146,8 @@ export class AuthService {
       sub: user.id,
     };
     const accessToken = this.jwtService.sign(payload, {
-      expiresIn: jwtExpiry,
-      secret: jwtSecret,
+      expiresIn: this.configService.get<string>('JWT_EXPIRY'),
+      secret: this.configService.get<string>('JWT_SECRET'),
     });
     const refreshToken = this.jwtService.sign(payload, {
       secret: jwtRefreshSecret,
@@ -175,39 +173,35 @@ export class AuthService {
 
   async refreshToken(refreshToken: RefreshTokenDto) {
     try {
-      const jwtRefreshSecret =
-        this.configService.get<string>('JWT_REFRESH_SECRET');
       const payload = this.jwtService.verify(refreshToken.refresh_token, {
-        secret: jwtRefreshSecret,
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
       });
+
       const user = await this.usersRepository.findOne({
         where: { id: payload.sub, refreshToken: refreshToken.refresh_token },
-        relations: ['courseRegistrations'],
       });
 
-      if (!user) {
-        throw new BadRequestException('Invalid token');
-      }
-
-      const jwtSecret = this.configService.get<string>('JWT_SECRET');
-      const accessExpiration = this.configService.get<string>('JWT_EXPIRY');
-      const refreshExpiration = this.configService.get<string>(
-        'JWT_REFRESH_EXPIRES_IN',
-      );
+      if (!user) throw new BadRequestException('Invalid refresh token');
 
       const newAccessToken = this.jwtService.sign(
-        { email: user.email, sub: user.id },
         {
-          secret: jwtSecret,
-          expiresIn: accessExpiration,
+          email: user.email,
+          sub: user.id,
+        },
+        {
+          secret: this.configService.get<string>('JWT_SECRET'),
+          expiresIn: this.configService.get<string>('JWT_EXPIRY'),
         },
       );
 
       const newRefreshToken = this.jwtService.sign(
-        { email: user.email, sub: user.id },
         {
-          secret: jwtRefreshSecret,
-          expiresIn: refreshExpiration,
+          email: user.email,
+          sub: user.id,
+        },
+        {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+          expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN'),
         },
       );
 
@@ -215,14 +209,8 @@ export class AuthService {
       await this.usersRepository.save(user);
 
       return { accessToken: newAccessToken, refreshToken: newRefreshToken };
-    } catch (error) {
-      if (
-        error.name === 'JsonWebTokenError' ||
-        error.name === 'TokenExpiredError'
-      ) {
-        throw new BadRequestException('Invalid or expired refresh token');
-      }
-      throw new BadRequestException('Invalid refresh token');
+    } catch {
+      throw new BadRequestException('Invalid or expired refresh token');
     }
   }
 }
