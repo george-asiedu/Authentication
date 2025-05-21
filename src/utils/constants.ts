@@ -8,4 +8,5 @@ export const constants = {
   globalPrefix: 'api',
   ROLES_KEY: 'roles',
   UnauthorizedError: 'Unauthorized user access',
-}
+  expiresIn: '15m',
+};
