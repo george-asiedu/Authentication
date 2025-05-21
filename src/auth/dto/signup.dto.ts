@@ -32,14 +32,14 @@ export class SignupDto {
   })
   @IsString()
   @Length(10, 15)
-  phone!: string;
+  phone?: string;
 
   @ApiProperty({
     example: '25-10-2000',
     required: true,
   })
   @IsDateString()
-  dob!: string;
+  dob?: string;
 
   @ApiProperty({
     example: 'strongPass123',
